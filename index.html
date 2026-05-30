@@ -774,7 +774,7 @@ html,body{width:100%;height:100%;background:#06090f;font-family:'Arial Narrow',A
 .bbl{width:13px;height:2px;border-radius:1px;flex-shrink:0;}
 
 /* ─── DRAW ─── */
-#dcanvas{position:fixed;top:0;left:0;width:100%;height:100%;z-index:9999;pointer-events:none;touch-action:none;display:block;}
+#dcanvas{position:fixed;top:0;left:0;width:100%;height:100%;z-index:800;pointer-events:none;touch-action:none;display:block;}
 #dcanvas.on{pointer-events:all;}
 
 /* ─── TOAST ─── */
@@ -1685,136 +1685,134 @@ BATTLES.forEach(function(b) {
 })();
 
 /* ================================================================
-   DRAW CANVAS — mismo código que funciona en test.html
-   Safari iOS: pointerdown/move/up directamente en el canvas
-   con setPointerCapture para anclar el evento
+   DRAW CANVAS — DEFINITIVO
+   Solución: cuando draw ON, deshabilitar pointer-events en #map
+   y poner canvas encima. Mismo código del test que funciona.
 ================================================================ */
-var canvas  = document.getElementById('dcanvas');
-var ctx     = canvas.getContext('2d');
-var drawOn  = false;
-var drawing = false;
-var lx = 0, ly = 0;
+var canvas = document.getElementById('dcanvas');
+var ctx    = canvas.getContext('2d');
+var drawOn = false, drawing = false, lx = 0, ly = 0;
 
-function resizeCan() {
+function resizeCan(){
   canvas.width  = window.innerWidth;
   canvas.height = window.innerHeight;
 }
 resizeCan();
 window.addEventListener('resize', resizeCan);
-window.addEventListener('orientationchange', function() { setTimeout(resizeCan, 300); });
+window.addEventListener('orientationchange', function(){ setTimeout(resizeCan,300); });
 
-function drawSeg(x1, y1, x2, y2, pressure) {
-  var p = (pressure > 0 && pressure <= 1) ? pressure : 0.5;
+function drawSeg(x1,y1,x2,y2,pressure){
+  var p = (pressure>0 && pressure<=1) ? pressure : 0.5;
   ctx.beginPath();
-  ctx.moveTo(x1, y1);
-  ctx.lineTo(x2, y2);
-  ctx.strokeStyle = 'rgba(240,200,74,' + (0.7 + p * 0.3) + ')';
-  ctx.lineWidth   = 2 + p * 5;
+  ctx.moveTo(x1,y1);
+  ctx.lineTo(x2,y2);
+  ctx.strokeStyle = 'rgba(240,200,74,'+(0.7+p*0.3)+')';
+  ctx.lineWidth   = 2 + p*5;
   ctx.lineCap     = 'round';
   ctx.lineJoin    = 'round';
   ctx.stroke();
 }
 
-/* Toggle draw mode */
-document.getElementById('btn-draw').addEventListener('click', function() {
+document.getElementById('btn-draw').addEventListener('click', function(){
   drawOn = !drawOn;
   var btn = document.getElementById('btn-draw');
-  if (drawOn) {
-    /* Canvas on top, intercepts all touch */
+  if(drawOn){
+    /* CLAVE: deshabilitar el mapa completamente a nivel CSS */
+    document.getElementById('map').style.pointerEvents = 'none';
+    /* Canvas encima de todo con pointer-events activos */
     canvas.style.pointerEvents = 'all';
-    canvas.style.cursor        = 'crosshair';
+    canvas.style.zIndex = '9999';
+    canvas.style.cursor = 'crosshair';
     btn.classList.add('active');
-    /* Disable every Leaflet interaction */
+    /* Deshabilitar Leaflet igual */
     map.dragging.disable();
     map.scrollWheelZoom.disable();
     map.touchZoom.disable();
     map.doubleClickZoom.disable();
     map.boxZoom.disable();
-    if (map.tap) map.tap.disable();
-    toast('✏️ PENCIL ACTIVO — dibuje en el mapa · toque ✏️ para navegar');
+    map.keyboard.disable();
+    if(map.tap) map.tap.disable();
+    toast('✏️ PENCIL ACTIVO — dibuje · toque ✏️ para navegar');
   } else {
+    document.getElementById('map').style.pointerEvents = 'auto';
     canvas.style.pointerEvents = 'none';
-    canvas.style.cursor        = 'default';
+    canvas.style.zIndex = '800';
+    canvas.style.cursor = 'default';
     btn.classList.remove('active');
     map.dragging.enable();
     map.scrollWheelZoom.enable();
     map.touchZoom.enable();
     map.doubleClickZoom.enable();
     map.boxZoom.enable();
-    if (map.tap) map.tap.enable();
+    map.keyboard.enable();
+    if(map.tap) map.tap.enable();
     toast('NAVEGACIÓN ACTIVA');
   }
 });
 
-document.getElementById('btn-clear').addEventListener('click', function() {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+document.getElementById('btn-clear').addEventListener('click', function(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
   toast('ANOTACIONES BORRADAS');
 });
 
-/* ── Pointer events (Apple Pencil = pointerType "pen") ── */
-canvas.addEventListener('pointerdown', function(e) {
+/* POINTER EVENTS en canvas — Apple Pencil = pointerType "pen" */
+canvas.addEventListener('pointerdown', function(e){
   e.preventDefault();
-  if (!drawOn) return;
+  e.stopPropagation();
   drawing = true;
   lx = e.clientX; ly = e.clientY;
   canvas.setPointerCapture(e.pointerId);
   ctx.beginPath();
-  ctx.arc(lx, ly, 1.5, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(240,200,74,0.9)';
+  ctx.arc(lx,ly,1.5,0,Math.PI*2);
+  ctx.fillStyle='rgba(240,200,74,0.9)';
   ctx.fill();
-}, { passive: false });
+}, {passive:false});
 
-canvas.addEventListener('pointermove', function(e) {
+canvas.addEventListener('pointermove', function(e){
   e.preventDefault();
-  if (!drawing || !drawOn) return;
+  e.stopPropagation();
+  if(!drawing) return;
   drawSeg(lx, ly, e.clientX, e.clientY, e.pressure);
   lx = e.clientX; ly = e.clientY;
-}, { passive: false });
+}, {passive:false});
 
-canvas.addEventListener('pointerup', function(e) {
+canvas.addEventListener('pointerup', function(e){
   e.preventDefault();
   drawing = false;
-}, { passive: false });
+}, {passive:false});
 
-canvas.addEventListener('pointercancel', function() {
+canvas.addEventListener('pointercancel', function(){
   drawing = false;
 });
 
-/* ── Touch fallback (finger on older Safari) ── */
-canvas.addEventListener('touchstart', function(e) {
-  e.preventDefault(); e.stopPropagation();
-  if (!drawOn) return;
+/* TOUCH fallback */
+canvas.addEventListener('touchstart', function(e){
+  e.preventDefault();
+  e.stopPropagation();
   var t = e.touches[0];
   lx = t.clientX; ly = t.clientY;
   drawing = true;
-}, { passive: false });
+}, {passive:false});
 
-canvas.addEventListener('touchmove', function(e) {
-  e.preventDefault(); e.stopPropagation();
-  if (!drawing || !drawOn || !e.touches.length) return;
+canvas.addEventListener('touchmove', function(e){
+  e.preventDefault();
+  e.stopPropagation();
+  if(!drawing) return;
   var t = e.touches[0];
-  var p = t.force || t.webkitForce || 0.5;
-  drawSeg(lx, ly, t.clientX, t.clientY, p);
+  drawSeg(lx, ly, t.clientX, t.clientY, t.force||t.webkitForce||0.5);
   lx = t.clientX; ly = t.clientY;
-}, { passive: false });
+}, {passive:false});
 
-canvas.addEventListener('touchend', function(e) {
+canvas.addEventListener('touchend', function(e){
   e.preventDefault();
   drawing = false;
-}, { passive: false });
+}, {passive:false});
 
-/* ── Mouse fallback (desktop) ── */
-canvas.addEventListener('mousedown', function(e) {
-  if (!drawOn) return;
-  drawing = true; lx = e.clientX; ly = e.clientY;
-});
-canvas.addEventListener('mousemove', function(e) {
-  if (!drawing || !drawOn) return;
-  drawSeg(lx, ly, e.clientX, e.clientY, 0.5);
-  lx = e.clientX; ly = e.clientY;
-});
-canvas.addEventListener('mouseup',    function() { drawing = false; });
-canvas.addEventListener('mouseleave', function() { drawing = false; });
+/* MOUSE fallback desktop */
+canvas.addEventListener('mousedown',  function(e){ drawing=true; lx=e.clientX; ly=e.clientY; });
+canvas.addEventListener('mousemove',  function(e){ if(!drawing)return; drawSeg(lx,ly,e.clientX,e.clientY,0.5); lx=e.clientX; ly=e.clientY; });
+canvas.addEventListener('mouseup',    function(){ drawing=false; });
+canvas.addEventListener('mouseleave', function(){ drawing=false; });
 
 /* ================================================================
    INIT
