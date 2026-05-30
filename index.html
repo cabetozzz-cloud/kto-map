@@ -774,8 +774,8 @@ html,body{width:100%;height:100%;background:#06090f;font-family:'Arial Narrow',A
 .bbl{width:13px;height:2px;border-radius:1px;flex-shrink:0;}
 
 /* ─── DRAW ─── */
-#dcanvas{position:fixed;top:0;left:0;z-index:800;pointer-events:none;}
-#dcanvas.on{/* overlay handles touch */}
+#dcanvas{position:fixed;top:0;left:0;width:100%;height:100%;z-index:9999;pointer-events:none;touch-action:none;display:block;}
+#dcanvas.on{pointer-events:all;}
 
 /* ─── TOAST ─── */
 #toast{
@@ -793,17 +793,7 @@ html,body{width:100%;height:100%;background:#06090f;font-family:'Arial Narrow',A
 .leaflet-control-attribution a{color:#c8a44a!important;}
 .leaflet-control-scale-line{background:rgba(6,9,15,.8)!important;border-color:#c8a44a!important;color:#c8a44a!important;font-family:'Courier New',Courier,monospace!important;font-size:9px!important;}
 .leaflet-tooltip{background:rgba(6,9,15,.93)!important;border:1px solid rgba(180,150,60,.4)!important;color:#d4c89a!important;font-family:'Arial Narrow',Arial,sans-serif!important;font-size:11px!important;border-radius:2px!important;box-shadow:none!important;}
-/* Draw overlay */
-#draw-overlay{
-  position:fixed;top:0;left:0;right:0;bottom:0;
-  z-index:9999;display:none;
-  touch-action:none;
-  -webkit-touch-callout:none;
-  -webkit-user-select:none;
-  user-select:none;
-  cursor:crosshair;
-  background:transparent;
-}
+
 </style>
 </head>
 <body>
@@ -1695,29 +1685,26 @@ BATTLES.forEach(function(b) {
 })();
 
 /* ================================================================
-   DRAW CANVAS — Apple Pencil / touch / mouse (Safari iOS bulletproof)
+   DRAW CANVAS — mismo código que funciona en test.html
+   Safari iOS: pointerdown/move/up directamente en el canvas
+   con setPointerCapture para anclar el evento
 ================================================================ */
-var canvas = document.getElementById('dcanvas');
-var ctx    = canvas.getContext('2d');
-var drawOn = false, drawing = false, lx = 0, ly = 0;
+var canvas  = document.getElementById('dcanvas');
+var ctx     = canvas.getContext('2d');
+var drawOn  = false;
+var drawing = false;
+var lx = 0, ly = 0;
 
-/* Keep canvas sized to full viewport */
 function resizeCan() {
   canvas.width  = window.innerWidth;
   canvas.height = window.innerHeight;
 }
 resizeCan();
 window.addEventListener('resize', resizeCan);
-window.addEventListener('orientationchange', function() {
-  setTimeout(resizeCan, 300);
-});
+window.addEventListener('orientationchange', function() { setTimeout(resizeCan, 300); });
 
-/* The overlay is already in the HTML — just get it */
-var overlay = document.getElementById('draw-overlay');
-
-/* Draw a line segment */
-function stroke(x1, y1, x2, y2, pressure) {
-  var p = (typeof pressure === 'number' && pressure > 0) ? Math.min(pressure, 1) : 0.5;
+function drawSeg(x1, y1, x2, y2, pressure) {
+  var p = (pressure > 0 && pressure <= 1) ? pressure : 0.5;
   ctx.beginPath();
   ctx.moveTo(x1, y1);
   ctx.lineTo(x2, y2);
@@ -1733,21 +1720,27 @@ document.getElementById('btn-draw').addEventListener('click', function() {
   drawOn = !drawOn;
   var btn = document.getElementById('btn-draw');
   if (drawOn) {
-    overlay.style.display = 'block';
+    /* Canvas on top, intercepts all touch */
+    canvas.style.pointerEvents = 'all';
+    canvas.style.cursor        = 'crosshair';
     btn.classList.add('active');
+    /* Disable every Leaflet interaction */
     map.dragging.disable();
     map.scrollWheelZoom.disable();
     map.touchZoom.disable();
     map.doubleClickZoom.disable();
+    map.boxZoom.disable();
     if (map.tap) map.tap.disable();
     toast('✏️ PENCIL ACTIVO — dibuje en el mapa · toque ✏️ para navegar');
   } else {
-    overlay.style.display = 'none';
+    canvas.style.pointerEvents = 'none';
+    canvas.style.cursor        = 'default';
     btn.classList.remove('active');
     map.dragging.enable();
     map.scrollWheelZoom.enable();
     map.touchZoom.enable();
     map.doubleClickZoom.enable();
+    map.boxZoom.enable();
     if (map.tap) map.tap.enable();
     toast('NAVEGACIÓN ACTIVA');
   }
@@ -1758,79 +1751,218 @@ document.getElementById('btn-clear').addEventListener('click', function() {
   toast('ANOTACIONES BORRADAS');
 });
 
-/* ── POINTER EVENTS (Apple Pencil on iPad fires as pointer type "pen") ── */
-overlay.addEventListener('pointerdown', function(e) {
+/* ── Pointer events (Apple Pencil = pointerType "pen") ── */
+canvas.addEventListener('pointerdown', function(e) {
   e.preventDefault();
+  if (!drawOn) return;
   drawing = true;
   lx = e.clientX; ly = e.clientY;
-  overlay.setPointerCapture(e.pointerId);
-  /* dot on tap */
+  canvas.setPointerCapture(e.pointerId);
   ctx.beginPath();
   ctx.arc(lx, ly, 1.5, 0, Math.PI * 2);
   ctx.fillStyle = 'rgba(240,200,74,0.9)';
   ctx.fill();
 }, { passive: false });
 
-overlay.addEventListener('pointermove', function(e) {
+canvas.addEventListener('pointermove', function(e) {
   e.preventDefault();
-  if (!drawing) return;
-  var pressure = e.pressure > 0 ? e.pressure : 0.5;
-  stroke(lx, ly, e.clientX, e.clientY, pressure);
+  if (!drawing || !drawOn) return;
+  drawSeg(lx, ly, e.clientX, e.clientY, e.pressure);
   lx = e.clientX; ly = e.clientY;
 }, { passive: false });
 
-overlay.addEventListener('pointerup', function(e) {
+canvas.addEventListener('pointerup', function(e) {
   e.preventDefault();
   drawing = false;
 }, { passive: false });
 
-overlay.addEventListener('pointercancel', function(e) {
+canvas.addEventListener('pointercancel', function() {
   drawing = false;
-}, { passive: false });
+});
 
-/* ── TOUCH EVENTS fallback (older Safari / finger) ── */
-overlay.addEventListener('touchstart', function(e) {
-  e.preventDefault();
-  e.stopPropagation();
-  if (e.touches.length > 0) {
-    lx = e.touches[0].clientX;
-    ly = e.touches[0].clientY;
-    drawing = true;
-  }
-}, { passive: false });
-
-overlay.addEventListener('touchmove', function(e) {
-  e.preventDefault();
-  e.stopPropagation();
-  if (!drawing || e.touches.length === 0) return;
+/* ── Touch fallback (finger on older Safari) ── */
+canvas.addEventListener('touchstart', function(e) {
+  e.preventDefault(); e.stopPropagation();
+  if (!drawOn) return;
   var t = e.touches[0];
-  var pressure = t.force || t.webkitForce || 0.5;
-  stroke(lx, ly, t.clientX, t.clientY, pressure);
+  lx = t.clientX; ly = t.clientY;
+  drawing = true;
+}, { passive: false });
+
+canvas.addEventListener('touchmove', function(e) {
+  e.preventDefault(); e.stopPropagation();
+  if (!drawing || !drawOn || !e.touches.length) return;
+  var t = e.touches[0];
+  var p = t.force || t.webkitForce || 0.5;
+  drawSeg(lx, ly, t.clientX, t.clientY, p);
   lx = t.clientX; ly = t.clientY;
 }, { passive: false });
 
-overlay.addEventListener('touchend', function(e) {
+canvas.addEventListener('touchend', function(e) {
   e.preventDefault();
   drawing = false;
 }, { passive: false });
 
-/* ── MOUSE fallback (desktop) ── */
-overlay.addEventListener('mousedown', function(e) {
+/* ── Mouse fallback (desktop) ── */
+canvas.addEventListener('mousedown', function(e) {
+  if (!drawOn) return;
   drawing = true; lx = e.clientX; ly = e.clientY;
 });
-overlay.addEventListener('mousemove', function(e) {
-  if (!drawing) return;
-  stroke(lx, ly, e.clientX, e.clientY, 0.5);
+canvas.addEventListener('mousemove', function(e) {
+  if (!drawing || !drawOn) return;
+  drawSeg(lx, ly, e.clientX, e.clientY, 0.5);
   lx = e.clientX; ly = e.clientY;
 });
-overlay.addEventListener('mouseup',    function() { drawing = false; });
-overlay.addEventListener('mouseleave', function() { drawing = false; });
+canvas.addEventListener('mouseup',    function() { drawing = false; });
+canvas.addEventListener('mouseleave', function() { drawing = false; });
 
 /* ================================================================
    INIT
 ================================================================ */
 setTimeout(function(){toast('MAPA CARGADO — SELECCIONE FASE · TOQUE UNA UNIDAD');},900);
 </script>
-<div id="draw-overlay"></div>
+</body>
+</html>/* ================================================================
+   DRAW CANVAS — mismo enfoque que funciona en test.html
+   Canvas directo con pointer events + touch-action:none en CSS
+================================================================ */
+var canvas = document.getElementById('dcanvas');
+var ctx    = canvas.getContext('2d');
+var drawOn = false, drawing = false, lx = 0, ly = 0;
+
+function resizeCan() {
+  canvas.width  = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+resizeCan();
+window.addEventListener('resize', resizeCan);
+window.addEventListener('orientationchange', function(){ setTimeout(resizeCan,300); });
+
+function drawSeg(x1,y1,x2,y2,pressure){
+  var p = (pressure>0&&pressure<=1)?pressure:0.5;
+  ctx.beginPath();
+  ctx.moveTo(x1,y1);
+  ctx.lineTo(x2,y2);
+  ctx.strokeStyle='rgba(240,200,74,'+(0.7+p*0.3)+')';
+  ctx.lineWidth=2+p*5;
+  ctx.lineCap='round';
+  ctx.lineJoin='round';
+  ctx.stroke();
+}
+
+/* Toggle: activate draw mode */
+document.getElementById('btn-draw').addEventListener('click',function(){
+  drawOn=!drawOn;
+  var btn=document.getElementById('btn-draw');
+  if(drawOn){
+    /* Put canvas on top and enable pointer events */
+    canvas.style.pointerEvents='all';
+    canvas.style.cursor='crosshair';
+    canvas.style.zIndex='9999';
+    btn.classList.add('active');
+    /* Disable ALL Leaflet interaction */
+    map.dragging.disable();
+    map.scrollWheelZoom.disable();
+    map.touchZoom.disable();
+    map.doubleClickZoom.disable();
+    map.boxZoom.disable();
+    map.keyboard.disable();
+    if(map.tap) map.tap.disable();
+    /* Close unit panel if open */
+    document.getElementById('upanel').style.display='none';
+    document.getElementById('rtool').style.display='flex';
+    toast('✏️ PENCIL ACTIVO — dibuje · toque ✏️ para navegar');
+  } else {
+    canvas.style.pointerEvents='none';
+    canvas.style.cursor='default';
+    canvas.style.zIndex='800';
+    btn.classList.remove('active');
+    map.dragging.enable();
+    map.scrollWheelZoom.enable();
+    map.touchZoom.enable();
+    map.doubleClickZoom.enable();
+    map.boxZoom.enable();
+    map.keyboard.enable();
+    if(map.tap) map.tap.enable();
+    toast('NAVEGACIÓN ACTIVA');
+  }
+});
+
+document.getElementById('btn-clear').addEventListener('click',function(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  toast('ANOTACIONES BORRADAS');
+});
+
+/* POINTER EVENTS — Apple Pencil fires as pointerType="pen" on Safari iOS */
+canvas.addEventListener('pointerdown',function(e){
+  e.preventDefault();
+  if(!drawOn)return;
+  drawing=true;
+  lx=e.clientX; ly=e.clientY;
+  canvas.setPointerCapture(e.pointerId);
+  ctx.beginPath();
+  ctx.arc(lx,ly,1.5,0,Math.PI*2);
+  ctx.fillStyle='rgba(240,200,74,0.9)';
+  ctx.fill();
+},{passive:false});
+
+canvas.addEventListener('pointermove',function(e){
+  e.preventDefault();
+  if(!drawing||!drawOn)return;
+  drawSeg(lx,ly,e.clientX,e.clientY,e.pressure);
+  lx=e.clientX; ly=e.clientY;
+},{passive:false});
+
+canvas.addEventListener('pointerup',function(e){
+  e.preventDefault();
+  drawing=false;
+},{passive:false});
+
+canvas.addEventListener('pointercancel',function(){
+  drawing=false;
+});
+
+/* TOUCH fallback (finger / older Safari) */
+canvas.addEventListener('touchstart',function(e){
+  e.preventDefault();
+  e.stopPropagation();
+  if(!drawOn)return;
+  var t=e.touches[0];
+  lx=t.clientX; ly=t.clientY;
+  drawing=true;
+},{passive:false});
+
+canvas.addEventListener('touchmove',function(e){
+  e.preventDefault();
+  e.stopPropagation();
+  if(!drawing||!drawOn)return;
+  var t=e.touches[0];
+  drawSeg(lx,ly,t.clientX,t.clientY,t.force||t.webkitForce||0.5);
+  lx=t.clientX; ly=t.clientY;
+},{passive:false});
+
+canvas.addEventListener('touchend',function(e){
+  e.preventDefault();
+  drawing=false;
+},{passive:false});
+
+/* MOUSE fallback (desktop) */
+canvas.addEventListener('mousedown',function(e){
+  if(!drawOn)return;
+  drawing=true; lx=e.clientX; ly=e.clientY;
+});
+canvas.addEventListener('mousemove',function(e){
+  if(!drawing||!drawOn)return;
+  drawSeg(lx,ly,e.clientX,e.clientY,0.5);
+  lx=e.clientX; ly=e.clientY;
+});
+canvas.addEventListener('mouseup',function(){ drawing=false; });
+canvas.addEventListener('mouseleave',function(){ drawing=false; });
+
+/* ================================================================
+   INIT
+================================================================ */
+setTimeout(function(){toast('MAPA CARGADO — SELECCIONE FASE · TOQUE UNA UNIDAD');},900);
+</script>
 </body>
 </html>
