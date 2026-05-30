@@ -774,7 +774,7 @@ html,body{width:100%;height:100%;background:#06090f;font-family:'Arial Narrow',A
 .bbl{width:13px;height:2px;border-radius:1px;flex-shrink:0;}
 
 /* ─── DRAW ─── */
-#dcanvas{position:absolute;top:0;left:0;z-index:800;pointer-events:none;}
+#dcanvas{position:fixed;top:0;left:0;z-index:800;pointer-events:none;}
 #dcanvas.on{/* overlay handles touch */}
 
 /* ─── TOAST ─── */
@@ -793,6 +793,17 @@ html,body{width:100%;height:100%;background:#06090f;font-family:'Arial Narrow',A
 .leaflet-control-attribution a{color:#c8a44a!important;}
 .leaflet-control-scale-line{background:rgba(6,9,15,.8)!important;border-color:#c8a44a!important;color:#c8a44a!important;font-family:'Courier New',Courier,monospace!important;font-size:9px!important;}
 .leaflet-tooltip{background:rgba(6,9,15,.93)!important;border:1px solid rgba(180,150,60,.4)!important;color:#d4c89a!important;font-family:'Arial Narrow',Arial,sans-serif!important;font-size:11px!important;border-radius:2px!important;box-shadow:none!important;}
+/* Draw overlay */
+#draw-overlay{
+  position:fixed;top:0;left:0;right:0;bottom:0;
+  z-index:9999;display:none;
+  touch-action:none;
+  -webkit-touch-callout:none;
+  -webkit-user-select:none;
+  user-select:none;
+  cursor:crosshair;
+  background:transparent;
+}
 </style>
 </head>
 <body>
@@ -1684,57 +1695,52 @@ BATTLES.forEach(function(b) {
 })();
 
 /* ================================================================
-   DRAW CANVAS — Apple Pencil + touch + mouse
-   Safari iOS: Apple Pencil fires as touch events (not pointer events).
-   Solution: listen to touch events on a full-screen overlay div,
-   NOT on the canvas itself, to avoid Leaflet interference.
+   DRAW CANVAS — Apple Pencil / touch / mouse (Safari iOS bulletproof)
 ================================================================ */
 var canvas = document.getElementById('dcanvas');
 var ctx    = canvas.getContext('2d');
-var drawOn  = false;
-var drawing = false;
-var lx = 0, ly = 0;
-var lastPressure = 0.5;
+var drawOn = false, drawing = false, lx = 0, ly = 0;
 
-/* Keep canvas pixel-perfect on resize / orientation change */
+/* Keep canvas sized to full viewport */
 function resizeCan() {
-  var pw = canvas.width, ph = canvas.height;
   canvas.width  = window.innerWidth;
   canvas.height = window.innerHeight;
 }
 resizeCan();
 window.addEventListener('resize', resizeCan);
+window.addEventListener('orientationchange', function() {
+  setTimeout(resizeCan, 300);
+});
 
-/* ── Draw overlay div — sits on top of everything ── */
-var overlay = document.createElement('div');
-overlay.id  = 'draw-overlay';
-overlay.style.cssText = [
-  'position:fixed',
-  'top:0','left:0','right:0','bottom:0',
-  'z-index:9999',
-  'display:none',
-  'touch-action:none',
-  '-webkit-user-select:none',
-  'user-select:none',
-  'cursor:crosshair',
-  'background:transparent'
-].join(';');
-document.body.appendChild(overlay);
+/* The overlay is already in the HTML — just get it */
+var overlay = document.getElementById('draw-overlay');
 
-/* ── Toggle draw mode ── */
+/* Draw a line segment */
+function stroke(x1, y1, x2, y2, pressure) {
+  var p = (typeof pressure === 'number' && pressure > 0) ? Math.min(pressure, 1) : 0.5;
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.strokeStyle = 'rgba(240,200,74,' + (0.7 + p * 0.3) + ')';
+  ctx.lineWidth   = 2 + p * 5;
+  ctx.lineCap     = 'round';
+  ctx.lineJoin    = 'round';
+  ctx.stroke();
+}
+
+/* Toggle draw mode */
 document.getElementById('btn-draw').addEventListener('click', function() {
   drawOn = !drawOn;
   var btn = document.getElementById('btn-draw');
   if (drawOn) {
     overlay.style.display = 'block';
     btn.classList.add('active');
-    /* Disable all map interaction */
     map.dragging.disable();
     map.scrollWheelZoom.disable();
     map.touchZoom.disable();
     map.doubleClickZoom.disable();
-    map.tap && map.tap.disable();
-    toast('✏️ PENCIL ACTIVO — Toque para dibujar · ✏️ de nuevo para navegar');
+    if (map.tap) map.tap.disable();
+    toast('✏️ PENCIL ACTIVO — dibuje en el mapa · toque ✏️ para navegar');
   } else {
     overlay.style.display = 'none';
     btn.classList.remove('active');
@@ -1742,7 +1748,7 @@ document.getElementById('btn-draw').addEventListener('click', function() {
     map.scrollWheelZoom.enable();
     map.touchZoom.enable();
     map.doubleClickZoom.enable();
-    map.tap && map.tap.enable();
+    if (map.tap) map.tap.enable();
     toast('NAVEGACIÓN ACTIVA');
   }
 });
@@ -1752,40 +1758,44 @@ document.getElementById('btn-clear').addEventListener('click', function() {
   toast('ANOTACIONES BORRADAS');
 });
 
-/* ── Coordinate helper ── */
-function getDrawXY(touch) {
-  /* touch.clientX/Y are viewport coords — canvas starts at 0,0 fixed */
-  return { x: touch.clientX, y: touch.clientY };
-}
-
-/* ── Draw stroke ── */
-function drawStroke(x1, y1, x2, y2, pressure) {
-  var p   = (pressure > 0 && pressure <= 1) ? pressure : 0.5;
-  var alpha = 0.7 + p * 0.3;
-  var width = 2 + p * 4;
+/* ── POINTER EVENTS (Apple Pencil on iPad fires as pointer type "pen") ── */
+overlay.addEventListener('pointerdown', function(e) {
+  e.preventDefault();
+  drawing = true;
+  lx = e.clientX; ly = e.clientY;
+  overlay.setPointerCapture(e.pointerId);
+  /* dot on tap */
   ctx.beginPath();
-  ctx.moveTo(x1, y1);
-  ctx.lineTo(x2, y2);
-  ctx.strokeStyle = 'rgba(240,200,74,' + alpha + ')';
-  ctx.lineWidth   = width;
-  ctx.lineCap     = 'round';
-  ctx.lineJoin    = 'round';
-  ctx.stroke();
-}
+  ctx.arc(lx, ly, 1.5, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(240,200,74,0.9)';
+  ctx.fill();
+}, { passive: false });
 
-/* ── Touch events on overlay (Apple Pencil fires as touch in Safari iOS) ── */
+overlay.addEventListener('pointermove', function(e) {
+  e.preventDefault();
+  if (!drawing) return;
+  var pressure = e.pressure > 0 ? e.pressure : 0.5;
+  stroke(lx, ly, e.clientX, e.clientY, pressure);
+  lx = e.clientX; ly = e.clientY;
+}, { passive: false });
+
+overlay.addEventListener('pointerup', function(e) {
+  e.preventDefault();
+  drawing = false;
+}, { passive: false });
+
+overlay.addEventListener('pointercancel', function(e) {
+  drawing = false;
+}, { passive: false });
+
+/* ── TOUCH EVENTS fallback (older Safari / finger) ── */
 overlay.addEventListener('touchstart', function(e) {
   e.preventDefault();
   e.stopPropagation();
   if (e.touches.length > 0) {
-    var pos = getDrawXY(e.touches[0]);
-    lx = pos.x; ly = pos.y;
+    lx = e.touches[0].clientX;
+    ly = e.touches[0].clientY;
     drawing = true;
-    /* Draw a dot on tap */
-    ctx.beginPath();
-    ctx.arc(lx, ly, 1.5, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(240,200,74,0.85)';
-    ctx.fill();
   }
 }, { passive: false });
 
@@ -1793,12 +1803,10 @@ overlay.addEventListener('touchmove', function(e) {
   e.preventDefault();
   e.stopPropagation();
   if (!drawing || e.touches.length === 0) return;
-  var t   = e.touches[0];
-  var pos = getDrawXY(t);
-  /* Apple Pencil exposes force via webkitForce on Safari */
+  var t = e.touches[0];
   var pressure = t.force || t.webkitForce || 0.5;
-  drawStroke(lx, ly, pos.x, pos.y, pressure);
-  lx = pos.x; ly = pos.y;
+  stroke(lx, ly, t.clientX, t.clientY, pressure);
+  lx = t.clientX; ly = t.clientY;
 }, { passive: false });
 
 overlay.addEventListener('touchend', function(e) {
@@ -1806,26 +1814,23 @@ overlay.addEventListener('touchend', function(e) {
   drawing = false;
 }, { passive: false });
 
-overlay.addEventListener('touchcancel', function(e) {
-  drawing = false;
-}, { passive: false });
-
-/* ── Mouse fallback for desktop testing ── */
+/* ── MOUSE fallback (desktop) ── */
 overlay.addEventListener('mousedown', function(e) {
   drawing = true; lx = e.clientX; ly = e.clientY;
 });
 overlay.addEventListener('mousemove', function(e) {
   if (!drawing) return;
-  drawStroke(lx, ly, e.clientX, e.clientY, 0.5);
+  stroke(lx, ly, e.clientX, e.clientY, 0.5);
   lx = e.clientX; ly = e.clientY;
 });
-overlay.addEventListener('mouseup',   function() { drawing = false; });
-overlay.addEventListener('mouseleave',function() { drawing = false; });
+overlay.addEventListener('mouseup',    function() { drawing = false; });
+overlay.addEventListener('mouseleave', function() { drawing = false; });
 
 /* ================================================================
    INIT
 ================================================================ */
 setTimeout(function(){toast('MAPA CARGADO — SELECCIONE FASE · TOQUE UNA UNIDAD');},900);
 </script>
+<div id="draw-overlay"></div>
 </body>
 </html>
